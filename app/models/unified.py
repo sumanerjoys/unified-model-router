@@ -38,10 +38,17 @@ class ChatCompletionRequest(BaseModel):
 
 
 class Delta(BaseModel):
-    """Incremental content for a streaming chunk."""
+    """Incremental content for a streaming chunk.
+
+    `reasoning_content` carries the "thinking" stream emitted by reasoning models
+    (e.g. gpt-oss, o-series) separately from the user-facing `content`. It is
+    preserved so clients that want to render reasoning can, while clients that
+    only read `content` are unaffected.
+    """
 
     role: Role | None = None
     content: str | None = None
+    reasoning_content: str | None = None
 
 
 class StreamChoice(BaseModel):

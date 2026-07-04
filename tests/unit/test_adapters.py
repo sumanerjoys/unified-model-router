@@ -44,6 +44,25 @@ class TestOpenAIAdapter:
     def test_parse_chunk_invalid_json_returns_none(self) -> None:
         assert OpenAIAdapter().parse_chunk("not json", "m") is None
 
+    def test_parse_reasoning_content(self) -> None:
+        # Reasoning models (e.g. gpt-oss, o-series) stream a separate
+        # reasoning_content field with content == null. It must be preserved.
+        chunk = OpenAIAdapter().parse_chunk(
+            '{"choices":[{"index":0,"delta":'
+            '{"content":null,"reasoning_content":"thinking..."}}]}',
+            "gpt-oss",
+        )
+        assert chunk is not None
+        assert chunk.choices[0].delta.content is None
+        assert chunk.choices[0].delta.reasoning_content == "thinking..."
+
+    def test_usage_only_chunk_with_empty_choices_returns_none(self) -> None:
+        # Some providers emit a trailing usage-only chunk with choices == [].
+        chunk = OpenAIAdapter().parse_chunk(
+            '{"choices":[],"usage":{"total_tokens":161}}', "m"
+        )
+        assert chunk is None
+
 
 class TestMockAdapter:
     def test_translate_request_splits_system_and_renames_fields(self) -> None:

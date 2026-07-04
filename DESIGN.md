@@ -180,6 +180,16 @@ data: [DONE]
 
 When `stream=false`, a single unified JSON body is returned with `choices[].message.content`.
 
+### Reasoning models
+
+Reasoning models (e.g. `gpt-oss`, o-series) stream a separate `reasoning_content`
+field in the delta (with `content == null`) for their "thinking", followed by the
+user-facing `content`. The unified `Delta` preserves `reasoning_content` so clients
+can render reasoning if desired; clients that read only `content` are unaffected.
+Some providers also emit a trailing usage-only chunk with an empty `choices` array,
+which carries no client-visible delta and is skipped. Both behaviors were found and
+handled via live testing against DigitalOcean Serverless Inference (`gpt-oss-120b`).
+
 ---
 
 ## 4. Error taxonomy

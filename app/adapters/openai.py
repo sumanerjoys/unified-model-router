@@ -48,10 +48,16 @@ class OpenAIAdapter(Adapter):
             choices_out.append(
                 StreamChoice(
                     index=choice.get("index", 0),
-                    delta=Delta(role=delta.get("role"), content=delta.get("content")),
+                    delta=Delta(
+                        role=delta.get("role"),
+                        content=delta.get("content"),
+                        reasoning_content=delta.get("reasoning_content"),
+                    ),
                     finish_reason=choice.get("finish_reason"),
                 )
             )
+        # Chunks with an empty choices array (e.g. the trailing usage-only chunk
+        # some providers emit) carry no client-visible delta -> skip them.
         if not choices_out:
             return None
 
