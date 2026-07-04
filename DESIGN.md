@@ -283,6 +283,24 @@ so the core behavior is unchanged when disabled.
   pricier fallbacks. Implemented at the chain-building seam, so the Router is
   unchanged. Unknown models use a neutral default cost.
 
+### Request flow through both extensions
+
+Both extensions plug into existing seams at the *edges* of the pipeline — the auth
+guard at the entrance (a route dependency that runs before any upstream socket),
+and cost-aware routing at the selection seam (reordering the chain before the
+Router consumes it). The core Router in the middle is unchanged, and both
+extensions are opt-in (default-off), so the happy path with them disabled is
+identical to the original core behavior.
+
+Note that "cheapest **responsive** first" is not a single function: it is the
+cost-sort (extension) plus the Router's existing fallback loop. If the cheapest
+provider fails a retryable error before any chunk is sent, the loop advances to
+the next-cheapest automatically.
+
+![Request flow through both extensions](docs/extensions-flow.png)
+
+*(Diagram source: [`docs/extensions-flow.mmd`](docs/extensions-flow.mmd).)*
+
 ---
 
 ## 9. Deployment notes

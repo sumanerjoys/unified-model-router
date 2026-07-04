@@ -1,0 +1,38 @@
+flowchart TD
+    Client([Client request<br/>POST /v1/chat/completions])
+
+    subgraph API["API Layer"]
+        Guard{{"require_api_key<br/>(route dependency)"}}
+        Validate["Validate body<br/>(Pydantic schema)"]
+    end
+
+    subgraph Selection["Provider selection (registry)"]
+        Build["build_provider_chain()"]
+        CostFlag{COST_AWARE_ROUTING?}
+        Stamp["Stamp each provider with<br/>cost_per_1k = cost_for(model)"]
+        Sort["order_by_cost()<br/>sort cheapest-first"]
+        Declared["Keep declared order<br/>(primary to fallback)"]
+    end
+
+    subgraph RouterLayer["Router (unchanged by extensions)"]
+        Loop["Try chain in order<br/>bounded hops + deadline"]
+        FB{"Provider failed<br/>+ retryable<br/>+ no chunk sent?"}
+    end
+
+    Upstream[(Upstream provider)]
+
+    Client --> Guard
+    Guard -->|"no keys configured<br/>(guard off)"| Validate
+    Guard -->|"valid key"| Validate
+    Guard -.->|"missing / invalid key"| Reject["401 Unauthorized<br/>(no upstream opened)"]
+
+    Validate --> Build
+    Build --> Stamp --> CostFlag
+    CostFlag -->|true| Sort --> Loop
+    CostFlag -->|false| Declared --> Loop
+
+    Loop --> Upstream
+    Upstream -->|success| Stream["Pipe SSE chunks to client"]
+    Upstream -->|fail| FB
+    FB -->|yes| Loop
+    FB -->|no| Surface["Surface error to client"]

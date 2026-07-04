@@ -13,3 +13,4 @@ tests
 !.env.example
 *.md
 DESIGN.md
+docs
