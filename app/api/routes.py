@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.registry import build_provider_chain
+from app.api.auth import require_api_key
 from app.config import get_settings
 from app.core.errors import ProviderError
 from app.core.provider_client import ProviderClient
@@ -47,7 +48,12 @@ def get_router(request: Request) -> Router:
     return Router(provider_client, chain, settings)
 
 
-@router.post("/v1/chat/completions", tags=["inference"], response_model=None)
+@router.post(
+    "/v1/chat/completions",
+    tags=["inference"],
+    response_model=None,
+    dependencies=[Depends(require_api_key)],
+)
 async def chat_completions(
     body: ChatCompletionRequest,
     x_request_id: str | None = Header(default=None),

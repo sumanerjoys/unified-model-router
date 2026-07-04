@@ -62,10 +62,17 @@ All settings load from environment / `.env` (see `.env.example`):
 |---|---|---|
 | `PRIMARY_BASE_URL` / `PRIMARY_API_KEY` | Real OpenAI-compatible provider | `https://api.openai.com/v1` |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` | Backup provider (defaults to local mock) | `http://localhost:9100/v1` |
+| `PRIMARY_MODEL` / `FALLBACK_MODEL` | Model id per provider (used by cost manifest) | _(empty)_ |
 | `MAX_FALLBACK_HOPS` | Max provider switches per request | `2` |
 | `REQUEST_DEADLINE_SECONDS` | Overall wall-clock deadline | `60` |
 | `UPSTREAM_CONNECT_TIMEOUT` / `UPSTREAM_READ_TIMEOUT` | Per-attempt timeouts | `5` / `60` |
-| `GATEWAY_API_KEYS` | Comma-separated allowed gateway keys (extension; empty disables) | _(empty)_ |
+| `GATEWAY_API_KEYS` | Comma-separated allowed gateway keys (**auth guard**; empty disables) | _(empty)_ |
+| `COST_AWARE_ROUTING` | Reorder providers cheapest-first (**cost-aware routing**) | `false` |
+
+### Extensions
+
+- **API Authorization Guard** — set `GATEWAY_API_KEYS=key1,key2`; callers must then send `Authorization: Bearer key1` (or `X-API-Key: key1`). Invalid/missing keys get `401` before any upstream call.
+- **Cost-aware routing** — set `COST_AWARE_ROUTING=true` to attempt the cheapest responsive provider first (per `app/models/manifest.py`) before pricier fallbacks.
 
 ## Running
 

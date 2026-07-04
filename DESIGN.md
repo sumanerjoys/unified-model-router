@@ -267,10 +267,21 @@ flowchart TD
 
 ---
 
-## 8. Deferred extensions (only if core is solid)
+## 8. Extensions (implemented)
 
-- **Cost-aware routing** — a runtime cost-per-token manifest orders the provider chain cheapest-responsive-first before defaulting to premium fallbacks.
-- **API Authorization Guard** — custom gateway keys/scopes; invalid traffic is rejected *before* any upstream connection is initialized.
+Both "Extensions & Next Steps" items are implemented and tested; each is opt-in
+so the core behavior is unchanged when disabled.
+
+- **API Authorization Guard** (`app/api/auth.py`) — a FastAPI dependency
+  (`require_api_key`) validates the caller's key (`Authorization: Bearer <key>` or
+  `X-API-Key`) against `GATEWAY_API_KEYS` and rejects invalid/missing keys with
+  **401 before any upstream connection is initialized**. Empty config disables the
+  guard (local/dev). Runs as a route `dependency`, so it executes ahead of routing.
+- **Cost-aware routing** (`app/models/manifest.py` + `build_provider_chain`) — a
+  per-model cost manifest (USD per 1K tokens) orders the provider chain
+  cheapest-responsive-first when `COST_AWARE_ROUTING=true`, before defaulting to
+  pricier fallbacks. Implemented at the chain-building seam, so the Router is
+  unchanged. Unknown models use a neutral default cost.
 
 ---
 

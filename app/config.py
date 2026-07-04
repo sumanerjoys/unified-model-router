@@ -30,10 +30,15 @@ class Settings(BaseSettings):
     # Primary provider (real, OpenAI-compatible).
     primary_base_url: str = "https://api.openai.com/v1"
     primary_api_key: str = ""
+    primary_model: str = ""
 
     # Fallback provider (defaults to the local mock).
     fallback_base_url: str = "http://localhost:9100/v1"
     fallback_api_key: str = "mock-key"
+    fallback_model: str = ""
+
+    # Cost-aware routing (extension): reorder the chain cheapest-first.
+    cost_aware_routing: bool = False
 
     # Routing / resilience tunables.
     max_fallback_hops: int = Field(default=2, ge=1)
