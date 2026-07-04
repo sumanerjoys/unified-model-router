@@ -161,6 +161,31 @@ docker run --rm -p 8000:8000 --env-file .env unified-model-router
 The image uses `python:3.14-slim`, installs pinned dependencies, runs as a
 non-root user, and includes a container `HEALTHCHECK` on `/health`.
 
+## Deployment (DigitalOcean App Platform)
+
+The service is deployed live on DigitalOcean App Platform, built from the
+`Dockerfile` in this repo. The spec lives at [`.do/app.yaml`](./.do/app.yaml).
+
+```bash
+# One-time: authorize GitHub for App Platform in the DO console, then:
+doctl apps create --spec .do/app.yaml
+# Set the provider key as a secret (never committed):
+doctl apps update <APP_ID> --spec .do/app.yaml   # with PRIMARY_API_KEY provided
+```
+
+Verified live (streaming through the deployed gateway to DigitalOcean Serverless
+Inference `gpt-oss-120b`):
+
+```bash
+curl -N -X POST "$APP_URL/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai-gpt-oss-120b","messages":[{"role":"user","content":"Say hello in 3 words."}],"stream":true}'
+# -> streamed unified SSE chunks + data: [DONE]
+```
+
+`GET /health` and `GET /ready` confirm liveness/readiness on the deployed URL.
+`deploy_on_push: true` redeploys automatically on every push to `main`.
+
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the full test suite on every

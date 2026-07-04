@@ -285,10 +285,16 @@ flowchart TD
   restrictions), so the build was performed with `buildah --isolation chroot`,
   which uses chroot instead of namespace isolation for `RUN` steps. On a normal
   Docker host, `docker build -t unified-model-router .` works directly.
-- **Run — environment-limited.** Actually *starting* the built container could not
-  be exercised in the sandbox: every OCI runtime (runc/crun/docker/podman) must
-  mount `/proc` into the container namespace to start the process, and that syscall
-  is denied here (`mount proc to proc: operation not permitted`). This is a sandbox
-  restriction, not an image defect — the image runs normally on any standard Docker
-  host. The container's entrypoint command (`uvicorn app.main:app --host 0.0.0.0
-  --port 8000`) was verified directly to serve `/health` and `/ready`.
+- **Run — environment-limited *in the sandbox*, but proven in production.**
+  Starting the built container could not be exercised in the dev sandbox itself:
+  every OCI runtime (runc/crun/docker/podman) must mount `/proc` into the container
+  namespace to start the process, and that syscall is denied here (`mount proc to
+  proc: operation not permitted`). This is a sandbox restriction, not an image
+  defect.
+- **Live deployment — verified.** The service is deployed on **DigitalOcean App
+  Platform**, built from this repo's `Dockerfile`, and confirmed working
+  end-to-end: `/health` and `/ready` return OK, and a streaming
+  `POST /v1/chat/completions` returns real unified SSE chunks (incl.
+  `reasoning_content`) and `[DONE]` from `gpt-oss-120b`. The custom `X-Request-ID`
+  is echoed back. Spec: `.do/app.yaml`; `deploy_on_push` redeploys on each push to
+  `main`.

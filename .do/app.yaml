@@ -1,0 +1,47 @@
+# DigitalOcean App Platform specification.
+# Deploys the Unified Model Router as a single web service built from the repo's
+# Dockerfile. Secrets (PRIMARY_API_KEY / FALLBACK_API_KEY) must be set in the App
+# Platform dashboard or via `doctl apps update` — never commit real keys.
+#
+# Deploy:
+#   doctl apps create --spec .do/app.yaml     # first time (after GitHub is authorized in the DO console)
+#   doctl apps update <APP_ID> --spec .do/app.yaml
+name: plankton-app
+region: blr
+ingress:
+  rules:
+    - component:
+        name: unified-model-router
+      match:
+        path:
+          prefix: /
+services:
+  - name: unified-model-router
+    dockerfile_path: /Dockerfile
+    source_dir: /
+    github:
+      repo: sumanerjoys/unified-model-router
+      branch: main
+      deploy_on_push: true
+    http_port: 8000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 30
+    envs:
+      - key: PRIMARY_BASE_URL
+        scope: RUN_TIME
+        value: https://inference.do-ai.run/v1
+      - key: PRIMARY_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: "SET_IN_DASHBOARD_OR_VIA_DOCTL"
+      - key: FALLBACK_BASE_URL
+        scope: RUN_TIME
+        value: https://inference.do-ai.run/v1
+      - key: FALLBACK_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: "SET_IN_DASHBOARD_OR_VIA_DOCTL"
