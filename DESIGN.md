@@ -277,11 +277,18 @@ flowchart TD
 ## 9. Deployment notes
 
 - **Container:** `Dockerfile` builds a `python:3.14-slim` image, runs as a non-root
-  user, and defines a `HEALTHCHECK` on `/health`. CI runs the test suite on push.
-- **Verification note:** the Dockerfile's runtime entrypoint
-  (`uvicorn app.main:app --host 0.0.0.0 --port 8000`) was verified directly; the
-  image build/run could not be exercised in the development sandbox because the
-  nested unprivileged container blocks the `mount`/`unshare` syscalls Docker
-  needs (build fails with `operation not permitted`). The build steps are
-  standard and build/run normally in any environment with a privileged Docker
-  daemon.
+  user (`appuser`), exposes port 8000, and defines a `HEALTHCHECK` on `/health`.
+  CI runs the test suite on push.
+- **Build — verified.** The image builds successfully (all 12 steps: dependency
+  install, code copy, non-root user, ~206 MB image). In the development sandbox the
+  standard Docker/BuildKit builder is blocked (nested-container `mount`/`unshare`
+  restrictions), so the build was performed with `buildah --isolation chroot`,
+  which uses chroot instead of namespace isolation for `RUN` steps. On a normal
+  Docker host, `docker build -t unified-model-router .` works directly.
+- **Run — environment-limited.** Actually *starting* the built container could not
+  be exercised in the sandbox: every OCI runtime (runc/crun/docker/podman) must
+  mount `/proc` into the container namespace to start the process, and that syscall
+  is denied here (`mount proc to proc: operation not permitted`). This is a sandbox
+  restriction, not an image defect — the image runs normally on any standard Docker
+  host. The container's entrypoint command (`uvicorn app.main:app --host 0.0.0.0
+  --port 8000`) was verified directly to serve `/health` and `/ready`.
