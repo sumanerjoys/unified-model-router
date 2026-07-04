@@ -53,6 +53,10 @@ def create_app() -> FastAPI:
         client_ready = getattr(app.state, "http_client", None) is not None
         return {"status": "ready" if client_ready else "starting"}
 
+    from app.api.routes import router as api_router
+
+    app.include_router(api_router)
+
     return app
 
 
