@@ -261,3 +261,17 @@ flowchart TD
 
 - **Cost-aware routing** — a runtime cost-per-token manifest orders the provider chain cheapest-responsive-first before defaulting to premium fallbacks.
 - **API Authorization Guard** — custom gateway keys/scopes; invalid traffic is rejected *before* any upstream connection is initialized.
+
+---
+
+## 9. Deployment notes
+
+- **Container:** `Dockerfile` builds a `python:3.14-slim` image, runs as a non-root
+  user, and defines a `HEALTHCHECK` on `/health`. CI runs the test suite on push.
+- **Verification note:** the Dockerfile's runtime entrypoint
+  (`uvicorn app.main:app --host 0.0.0.0 --port 8000`) was verified directly; the
+  image build/run could not be exercised in the development sandbox because the
+  nested unprivileged container blocks the `mount`/`unshare` syscalls Docker
+  needs (build fails with `operation not permitted`). The build steps are
+  standard and build/run normally in any environment with a privileged Docker
+  daemon.
