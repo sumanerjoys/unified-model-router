@@ -38,14 +38,18 @@ def _forced_failure(request: Request) -> str | None:
 async def generate(request: Request) -> StreamingResponse | JSONResponse:
     """Mock generation endpoint using the non-OpenAI vendor schema."""
     fail = _forced_failure(request)
-    if fail in {"429", "503", "500", "502", "504"}:
+    if fail == "timeout":
+        # In-process ASGI can't be interrupted by an httpx socket timeout, so a
+        # long sleep would just stall tests. Real timeout behavior is covered by
+        # injecting httpx.ReadTimeout at the transport layer (see tests). Here we
+        # sleep briefly to represent a slow upstream.
+        await asyncio.sleep(0.5)
+    elif fail and fail.isdigit():
         return JSONResponse(
-            {"error": {"type": "rate_limit", "message": f"forced {fail}"}},
+            {"error": {"type": "forced", "message": f"forced {fail}"}},
             status_code=int(fail),
             headers={"Retry-After": "1"} if fail == "429" else None,
         )
-    if fail == "timeout":
-        await asyncio.sleep(30)  # exceed the gateway read timeout
 
     body = await request.json()
     tokens = DEFAULT_TOKENS

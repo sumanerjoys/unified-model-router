@@ -13,7 +13,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.registry import build_provider_chain
@@ -34,8 +34,13 @@ logger = logging.getLogger("api")
 router = APIRouter()
 
 
-def _build_router(request: Request) -> Router:
-    """Construct a Router bound to the shared HTTP client and provider chain."""
+def get_router(request: Request) -> Router:
+    """Provide a Router bound to the shared HTTP client and provider chain.
+
+    This is a FastAPI dependency so tests can override it via
+    `app.dependency_overrides[get_router]` to inject failure-injecting or
+    fully in-process providers without patching module internals.
+    """
     settings = get_settings()
     provider_client = ProviderClient(request.app.state.http_client)
     chain = build_provider_chain(settings)
@@ -45,14 +50,13 @@ def _build_router(request: Request) -> Router:
 @router.post("/v1/chat/completions", tags=["inference"], response_model=None)
 async def chat_completions(
     body: ChatCompletionRequest,
-    request: Request,
     x_request_id: str | None = Header(default=None),
+    app_router: Router = Depends(get_router),
 ) -> StreamingResponse | JSONResponse:
     """Unified chat completions endpoint with SSE streaming and fallback."""
     request_id = x_request_id or f"req-{uuid.uuid4().hex}"
     unified = body.model_dump()
     model = body.model
-    app_router = _build_router(request)
     headers = {"X-Request-ID": request_id}
 
     if body.stream:
@@ -85,7 +89,9 @@ async def chat_completions(
             },
         )
 
-    # Non-streaming: aggregate the streamed unified chunks into one body.
+    # Non-streaming: aggregate upstream chunks into one body. We still request a
+    # stream upstream (single transport code path) and collect it server-side.
+    unified["stream"] = True
     try:
         parts: list[str] = []
         finish_reason = "stop"
