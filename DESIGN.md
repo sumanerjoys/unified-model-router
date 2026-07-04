@@ -1,0 +1,263 @@
+# Design — Unified Model Router
+
+This document captures the design for a production-ready API gateway that acts as a unified model router (OpenRouter-style). It covers the problem statement, architecture, the unified schema, the fallback policy, and stream/connection management.
+
+---
+
+## 1. Problem statement (plain English)
+
+### The core idea: a "universal translator + traffic cop" for LLMs
+
+Apps that use AI often want to talk to multiple providers (OpenAI, Anthropic, Groq, ...). The problem is that **every provider speaks a slightly different language**:
+
+- OpenAI wants the system prompt *inside* the `messages` array.
+- Anthropic wants the system prompt as a *separate* top-level field, and structures content as "blocks."
+- Streaming formats, error codes, and URLs all differ.
+
+Hardcoding to one provider means switching requires rewriting code — and if that provider goes down, the app goes down.
+
+A **unified model router** sits between the app and all providers:
+
+```
+Your App  ─────►  [ Unified Router ]  ─────►  OpenAI
+ (speaks ONE                            ├───►  Mock / other
+  language)                             └───►  Groq / ...
+```
+
+The app always speaks **one language** (a unified schema). The router translates to whichever provider it picks, and if one fails, it silently tries another — the app never notices. This is a mini version of what OpenRouter does commercially.
+
+### The three core jobs
+
+**Job 1 — Unified API & schema translation.** Accept one standard request at `POST /v1/chat/completions`, then translate it to whatever the chosen provider expects.
+
+Example standard request:
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [{"role": "user", "content": "Hello!"}],
+  "stream": true
+}
+```
+
+The router inspects `model`, decides the target provider, translates if needed, and forwards it.
+
+**Job 2 — Streaming proxy (SSE).** LLMs generate text token by token. The response streams back via **Server-Sent Events (SSE)** (the "typewriter" effect). The router must **pipe** each chunk straight through as it arrives — a **water pipe, not a bucket**. Buffering the whole response wastes memory and kills the streaming feel.
+
+Example stream the client receives:
+
+```
+data: {"choices":[{"delta":{"content":"Hel"}}]}
+data: {"choices":[{"delta":{"content":"lo"}}]}
+data: {"choices":[{"delta":{"content":"!"}}]}
+data: [DONE]
+```
+
+**Job 3 — Resilient fallback routing.** If the primary provider fails with a *transient* error (429 rate limit, 502/503 down), the router **silently switches to a backup** and streams from there. The client never sees the error — they just get their answer, slightly later.
+
+```
+Client → Router → OpenAI  ❌ 429 Too Many Requests
+                     ↓ (silent switch)
+                  Backup   ✅ streams the answer
+Client ← receives a normal streaming response, none the wiser
+```
+
+### The subtle part: the "point of no return"
+
+The tricky question is **when it is too late to fall back**:
+
+- Provider fails *before* sending any text → easy, switch to backup.
+- Provider fails *after* already sending "Hel" → cannot switch; the client already has half an answer from a different model, and switching would produce gibberish.
+
+So fallback has a **point of no return**: the moment the first chunk reaches the client. The design addresses this explicitly (see §5).
+
+### What "production-ready" adds
+
+- **Client hang-ups** — if the user disconnects mid-answer, stop and close the upstream connection (don't keep burning tokens).
+- **Timeouts** — a hung provider must not hang the client forever.
+- **Tests, CI/CD, docs, and an architecture diagram.**
+
+---
+
+## 2. Architecture
+
+### Guiding principle: separation of concerns
+
+Each layer does exactly one job and knows nothing about the others' internals. This makes the system testable and extensible, and directly satisfies the rubric ("separates routing logic from vendor payload variations via the Adapter pattern").
+
+```mermaid
+flowchart TD
+    Client([Client])
+    subgraph Gateway["Unified Model Router"]
+        API["API Layer<br/>auth · validate · SSE out"]
+        Router["Router Layer<br/>pick provider · fallback policy"]
+        PC["ProviderClient<br/>HTTP · stream · timeouts · error classification"]
+        Adapter["Adapter Layer<br/>PURE schema translation (unified ⇄ vendor)"]
+    end
+    Upstream1[(Primary provider<br/>OpenAI-compatible)]
+    Upstream2[(Fallback provider<br/>mock / other)]
+
+    Client -->|POST /v1/chat/completions| API
+    API --> Router
+    Router --> PC
+    PC --> Adapter
+    PC -->|translated request| Upstream1
+    PC -.->|on transient failure| Upstream2
+    Upstream1 -->|SSE chunks| PC
+    Upstream2 -.->|SSE chunks| PC
+    PC -->|unified chunks| Router
+    Router -->|piped SSE| API
+    API -->|text/event-stream| Client
+```
+
+### The four layers
+
+**Layer 1 — API Layer.** The HTTP front door: `POST /v1/chat/completions`, `/health`, `/ready`. Validates the incoming request, checks the gateway API key (auth guard), and returns the `StreamingResponse`.
+*Why separate:* the web/HTTP concern shouldn't leak into routing logic; it's where we reject bad requests *before* opening any expensive upstream connection.
+
+**Layer 2 — Router Layer.** The brain: decides **which** provider(s) to try and in what order, then orchestrates the **fallback policy** (bounded hops, deadlines, which errors trigger a switch).
+*Why separate:* pure decision-making, isolated from HTTP and vendor JSON, so fallback logic can be tested on its own.
+
+**Layer 3 — ProviderClient (transport).** Owns everything about *talking* to an upstream: the shared httpx client, opening the streaming connection, timeouts, and **classifying errors** into a taxonomy (transient / fatal / timeout).
+*Why separate:* networking is messy and stateful; quarantining it keeps the Router clean and holds the **shared connection pool** (created once at startup, reused for throughput).
+
+**Layer 4 — Adapter (pure translation).** Pure functions converting **unified → vendor** request and **vendor chunk → unified** chunk. No network, no state.
+*Why separate and pure:* this is the **Adapter pattern** centerpiece. Pure functions (JSON in → JSON out) are unit-testable with **zero mocking**. Adding a provider = one new adapter, touching nothing else.
+
+### The senior insight in the structure
+
+We split **Adapter** (translation) from **ProviderClient** (transport). A naive design merges them ("the OpenAI adapter also makes the HTTP call"). Keeping them apart means translation is pure/mock-free to test, and transport is tested once and reused by all providers. That separation is the difference between *using* the Adapter pattern and *understanding why* it exists.
+
+### What we're adding, and why
+
+| Component | Why it's there | Rubric requirement |
+|---|---|---|
+| Unified Pydantic schema | One language for clients | Unified API & schema translation |
+| Adapter layer (pure) | Vendor translation, isolated | Adapter pattern / schema translation |
+| ProviderClient + shared pool | Clean transport, throughput | Streaming, connection management |
+| Router + fallback policy | Silent resilience | Resilient fallback routing |
+| SSE `StreamingResponse` piping | Real streaming, low memory | Streaming proxy (SSE) |
+| Cancellation-based disconnect handling | No leaks on hang-up | Stream & Connection Management |
+| Error taxonomy (enum) | Decide what is retryable | Resilient fallback |
+| Auth guard *(extension)* | Reject bad traffic early | API Authorization Guard |
+| Cost manifest *(extension)* | Cheapest-first routing | Cost-Aware Routing |
+
+---
+
+## 3. Unified schema
+
+The unified schema mirrors the OpenAI `chat/completions` shape (the de-facto standard for maximum client compatibility).
+
+### Request
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `model` | string | yes | Logical model name; mapped to a provider via the registry |
+| `messages` | array | yes | `{role, content}` items; roles: `system` / `user` / `assistant` |
+| `stream` | bool | no (default `false`) | When `true`, respond via SSE |
+| `temperature` | number | no | Sampling temperature |
+| `max_tokens` | int | no | Upper bound on generated tokens |
+| `metadata` | object | no | Passthrough; may carry a client request id |
+
+Inbound `X-Request-ID` header is honored if present; otherwise the gateway generates one and echoes it back for traceability.
+
+### Unified streaming chunk (what the client always receives)
+
+Regardless of which vendor served the response, the client receives OpenAI-style SSE chunks:
+
+```
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hel"},"index":0,"finish_reason":null}]}
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"lo"},"index":0,"finish_reason":null}]}
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+data: [DONE]
+```
+
+- `Content-Type: text/event-stream`
+- Each event is a `data: ` line followed by a blank line.
+- Terminates with the `data: [DONE]` sentinel.
+
+### Non-streaming response
+
+When `stream=false`, a single unified JSON body is returned with `choices[].message.content`.
+
+---
+
+## 4. Error taxonomy
+
+Errors are classified into an enum that drives routing decisions:
+
+| Class | Examples | Triggers fallback? |
+|---|---|---|
+| `TRANSIENT` | 429, 502, 503, connection reset | Yes |
+| `TIMEOUT` | connect timeout, read timeout | Yes |
+| `FATAL` | 400, 401, 403, 404, malformed request/response | No — surface to client |
+
+Only `TRANSIENT` and `TIMEOUT` cause a provider switch. `FATAL` errors are surfaced immediately (retrying would not help and could mask a real client bug).
+
+---
+
+## 5. Fallback policy
+
+### Point of no return
+
+Fallback is only safe **before the first chunk is flushed to the client**. Once a chunk has been sent, switching providers would corrupt the response, so a mid-stream failure after the first byte terminates the stream with an error event instead of switching.
+
+Three failure windows:
+
+1. **Pre-connection / immediate transient error** → safe to fall back transparently.
+2. **After headers, before first token** → still safe to fall back (nothing user-visible yet).
+3. **Mid-stream, after tokens sent** → cannot silently switch; terminate with an error event.
+
+### Commit window (senior differentiator)
+
+Optionally hold the first chunk(s) for a short window (a few hundred ms) before flushing to the client. This keeps early upstream failures recoverable at the cost of a small increase in time-to-first-token. The simple implementation flushes immediately (point-of-no-return at first chunk); the commit-window variant is documented as the more resilient option.
+
+### Bounds (no retry storms)
+
+- **Bounded fallback depth** — max hops (default 2) so one outage can't cause an amplification storm.
+- **Per-attempt timeout** and an **overall request deadline** so total latency is capped.
+- **Honor `Retry-After`** on 429 rather than blindly retrying.
+- Immediate switch when moving to a *different* provider; jittered backoff only when retrying the *same* one.
+
+```mermaid
+flowchart TD
+    Start([Request]) --> A[Attempt provider N]
+    A --> Stream{First chunk<br/>received?}
+    Stream -->|yes| Pipe[Pipe chunks to client]
+    Pipe --> MidErr{Mid-stream<br/>error?}
+    MidErr -->|no| Done([DONE])
+    MidErr -->|yes| Term[Terminate with error event]
+    Stream -->|error before first chunk| Class{Error class}
+    Class -->|FATAL| Surface[Surface error to client]
+    Class -->|TRANSIENT / TIMEOUT| Budget{Hops left &<br/>deadline ok?}
+    Budget -->|yes| Next[Switch to provider N+1] --> A
+    Budget -->|no| Surface
+```
+
+---
+
+## 6. Stream & connection management
+
+**True streaming (no buffering).** Responses are piped chunk-by-chunk using an async generator over the upstream stream, yielded into FastAPI's `StreamingResponse`. The full upstream body is never read into memory (`aread()` is avoided) — this satisfies the "without buffering the full execution payload in memory" requirement.
+
+**Client disconnection mid-generation.** Handled via `asyncio.CancelledError` propagation rather than polling `is_disconnected()`. When the client drops, the cancellation propagates into the streaming generator; a `try/finally` guarantees the upstream httpx stream (and its socket) is closed, preventing socket/token leaks and stopping token spend immediately.
+
+**Target connection timeouts.** The `ProviderClient` sets separate **connect** and **read** timeouts. A connect timeout is treated as `TIMEOUT` and triggers fallback; a read timeout mid-stream (after first chunk) terminates the stream cleanly.
+
+**Connection pooling.** A single shared `httpx.AsyncClient` with a tuned pool is created in the FastAPI lifespan and reused across requests — never one client per request — to avoid TCP/TLS handshake churn and maximize throughput.
+
+**Graceful shutdown.** On shutdown, in-flight streams are drained and the shared client is closed in the lifespan teardown.
+
+---
+
+## 7. Observability
+
+- A **request id** (inbound `X-Request-ID` or generated) is attached to every request and echoed back.
+- **Structured (JSON) logs** record the request id and the full provider-attempt chain, so a fallback sequence ("primary 429 → switched to backup → success") is fully traceable.
+
+---
+
+## 8. Deferred extensions (only if core is solid)
+
+- **Cost-aware routing** — a runtime cost-per-token manifest orders the provider chain cheapest-responsive-first before defaulting to premium fallbacks.
+- **API Authorization Guard** — custom gateway keys/scopes; invalid traffic is rejected *before* any upstream connection is initialized.

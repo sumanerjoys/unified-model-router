@@ -10,7 +10,7 @@ A production-ready API gateway that acts as a unified model router (OpenRouter-s
 - **Streaming proxy (SSE)** — chunked `text/event-stream` piped from upstream to client without buffering the full payload in memory.
 - **Resilient fallback routing** — transient upstream errors (429/502/503, timeouts) transparently switch to a backup provider without client disruption.
 
-## Planned architecture (layers)
+## Architecture (layers)
 
 ```
 API Layer        HTTP surface, auth guard, validation, SSE response
@@ -19,7 +19,7 @@ ProviderClient   transport: HTTP streaming, timeouts, error classification
 Adapter Layer    PURE schema translation (unified <-> vendor), zero I/O
 ```
 
-A full Mermaid architecture diagram and the Stream & Connection Management writeup will be added in the Design stage.
+See **[DESIGN.md](./DESIGN.md)** for the full problem statement, architecture diagrams (Mermaid), unified schema, error taxonomy, fallback policy, and stream/connection management.
 
 ## Tech stack
 
